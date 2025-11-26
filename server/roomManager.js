@@ -23,7 +23,8 @@ function createRoom(roomName) {
         privateKey,
         createdAt: Date.now(),
         expiresAt: Date.now() + ROOM_LIFETIME,
-        clients: new Set()
+        clients: new Set(),
+        messages: [] // Store encrypted messages
     };
 
     rooms.set(roomId, room);
@@ -67,8 +68,26 @@ function getRoom(roomId) {
     return rooms.get(roomId);
 }
 
+function addMessage(roomId, messageData) {
+    const room = rooms.get(roomId);
+    if (room) {
+        room.messages.push(messageData);
+        // Optional: Limit history size (e.g., last 100 messages)
+        if (room.messages.length > 100) {
+            room.messages.shift();
+        }
+    }
+}
+
+function getRoomMessages(roomId) {
+    const room = rooms.get(roomId);
+    return room ? room.messages : [];
+}
+
 module.exports = {
     createRoom,
     joinRoom,
-    getRoom
+    getRoom,
+    addMessage,
+    getRoomMessages
 };

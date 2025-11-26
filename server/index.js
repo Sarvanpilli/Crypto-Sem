@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const { createRoom, joinRoom, getRoom } = require('./roomManager');
+const { createRoom, joinRoom, getRoom, addMessage, getRoomMessages } = require('./roomManager');
 
 const app = express();
 const server = http.createServer(app);
@@ -36,7 +36,7 @@ app.post('/api/join-room', (req, res) => {
     if (!roomId || !passkey) {
         return res.status(400).json({ error: 'Room ID and Passkey are required' });
     }
-
+    
     const result = joinRoom(roomId, passkey);
     if (result.error) {
         return res.status(401).json(result);
@@ -55,6 +55,11 @@ io.on('connection', (socket) => {
         if (room) {
             socket.join(roomId);
             console.log(`Socket ${socket.id} joined room ${roomId}`);
+            
+            // Send existing message history
+            const history = getRoomMessages(roomId);
+            socket.emit('message_history', history);
+
             socket.to(roomId).emit('user_joined', { userId: socket.id });
         } else {
             socket.emit('error', 'Room does not exist');
@@ -66,15 +71,20 @@ io.on('connection', (socket) => {
         // We just relay it.
         const room = getRoom(roomId);
         if (room) {
+            const messageData = {
+                message, // Encrypted payload
+                sender,
+                timestamp: Date.now()
+            };
+
+            // Store message in history
+            addMessage(roomId, messageData);
+
             // Broadcast to everyone in the room INCLUDING sender (so they see it confirmed)
             // Or typically exclude sender. Let's exclude sender for efficiency if they handle their own UI.
             // But usually sender wants to know it arrived.
             // Let's broadcast to room.
-            io.to(roomId).emit('receive_message', {
-                message, // Encrypted payload
-                sender,
-                timestamp: Date.now()
-            });
+            io.to(roomId).emit('receive_message', messageData);
         }
     });
 

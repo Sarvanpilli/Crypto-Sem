@@ -40,6 +40,33 @@ export default function Room() {
             setMessages(prev => [...prev, { system: true, text: `User joined.` }]);
         });
 
+        socket.on('message_history', (history) => {
+            try {
+                const decryptedHistory = history.map(msg => {
+                    try {
+                        const decryptor = new JSEncrypt();
+                        decryptor.setPrivateKey(parsedKeys.privateKey);
+                        const decryptedText = decryptor.decrypt(msg.message);
+
+                        if (!decryptedText) return null;
+
+                        return {
+                            text: decryptedText,
+                            sender: msg.sender === socket.id ? 'Me' : 'Peer',
+                            timestamp: msg.timestamp
+                        };
+                    } catch (e) {
+                        console.error("Failed to decrypt history message", e);
+                        return null;
+                    }
+                }).filter(Boolean);
+
+                setMessages(prev => [...decryptedHistory, ...prev]);
+            } catch (err) {
+                console.error("Failed to process history", err);
+            }
+        });
+
         socket.on('receive_message', ({ message, sender, timestamp }) => {
             try {
                 // Decrypt message
