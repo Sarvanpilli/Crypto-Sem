@@ -14,7 +14,8 @@ export default function Home() {
 
     const handleCreateRoom = async () => {
         try {
-            const res = await fetch('http://localhost:3001/api/create-room', {
+            const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3001';
+            const res = await fetch(`${serverUrl}/api/create-room`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ roomName: roomName || 'New Room' }),
@@ -28,7 +29,8 @@ export default function Home() {
 
     const handleJoinRoom = async () => {
         try {
-            const res = await fetch('http://localhost:3001/api/join-room', {
+            const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3001';
+            const res = await fetch(`${serverUrl}/api/join-room`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ roomId: joinRoomId, passkey: joinPasskey }),
