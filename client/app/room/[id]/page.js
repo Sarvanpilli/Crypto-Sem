@@ -34,7 +34,20 @@ export default function Room() {
     const [pendingRequests, setPendingRequests] = useState([]);
     const [showRequests, setShowRequests] = useState(false);
 
+    // Refs to access latest state in socket listeners
+    const roomKeyRef = useRef(roomKey);
+    const identityKeyRef = useRef(identityKey);
+
     useEffect(() => {
+        roomKeyRef.current = roomKey;
+    }, [roomKey]);
+
+    useEffect(() => {
+        identityKeyRef.current = identityKey;
+    }, [identityKey]);
+
+    useEffect(() => {
+        console.log(">>> ROOM COMPONENT MOUNTED <<<");
         const init = async () => {
             const nickname = sessionStorage.getItem('nickname');
             if (!nickname) {
@@ -134,19 +147,24 @@ export default function Room() {
 
             // 5. Listen for Approval
             socket.on('join_approved', async ({ encryptedKey, roomId: approvedRoomId }) => {
+                console.log("[DEBUG] Received join_approved", { encryptedKey, approvedRoomId });
                 if (approvedRoomId !== roomId) return;
                 setStatus('Approval Received. Unwrapping Key...');
 
                 try {
                     // Import Creator's Public Key
+                    console.log("[DEBUG] Importing Creator Public Key", data.creatorPublicKey);
                     const creatorPubKey = await importPublicKey(data.creatorPublicKey);
 
                     // Derive Shared Secret
+                    console.log("[DEBUG] Deriving Shared Secret");
                     const sharedSecret = await deriveSharedSecret(identityKeyPair.privateKey, creatorPubKey);
 
                     // Unwrap Room Key
+                    console.log("[DEBUG] Unwrapping Room Key", encryptedKey);
                     const unwrappedRoomKey = await unwrapKey(encryptedKey, sharedSecret);
                     setRoomKey(unwrappedRoomKey);
+                    console.log("[DEBUG] Room Key Unwrapped Successfully", unwrappedRoomKey);
 
                     // Store Keys
                     await storeKey(`room_${roomId}_identity`, identityKeyPair);
@@ -223,17 +241,19 @@ export default function Room() {
             const userPubKey = await importPublicKey(targetPublicKey);
 
             // 2. Get our Private Key (Identity)
-            // We need to fetch it from state or DB. We have it in state `identityKey`.
-            if (!identityKey || !roomKey) {
-                console.error("[DEBUG] Cannot approve: Missing identityKey or roomKey", { identityKey, roomKey });
+            const currentIdentityKey = identityKeyRef.current;
+            const currentRoomKey = roomKeyRef.current;
+
+            if (!currentIdentityKey || !currentRoomKey) {
+                console.error("[DEBUG] Cannot approve: Missing identityKey or roomKey", { identityKey: currentIdentityKey, roomKey: currentRoomKey });
                 return;
             }
 
             // 3. Derive Shared Secret
-            const sharedSecret = await deriveSharedSecret(identityKey.privateKey, userPubKey);
+            const sharedSecret = await deriveSharedSecret(currentIdentityKey.privateKey, userPubKey);
 
             // 4. Wrap Room Key
-            const wrappedKey = await wrapKey(roomKey, sharedSecret);
+            const wrappedKey = await wrapKey(currentRoomKey, sharedSecret);
 
             // 5. Send Encrypted Key
             socket.emit('approve_join', {
@@ -248,9 +268,15 @@ export default function Room() {
     };
 
     const handleReceiveMessage = async (data, isHistory = false) => {
-        if (!roomKey) return;
+        const currentRoomKey = roomKeyRef.current;
+        if (!currentRoomKey) {
+            console.warn("[DEBUG] Received message but no roomKey available");
+            return;
+        }
         try {
-            const decryptedText = await decryptMessage(roomKey, data.message, data.nonce);
+            console.log("[DEBUG] Decrypting message", data);
+            const decryptedText = await decryptMessage(currentRoomKey, data.message, data.nonce);
+            console.log("[DEBUG] Decrypted text:", decryptedText);
             const msgObj = {
                 text: decryptedText,
                 sender: data.sender === socket.id ? 'Me' : 'Peer',
@@ -279,10 +305,15 @@ export default function Room() {
     };
 
     const sendMessage = async () => {
-        if (!input.trim() || !roomKey) return;
+        if (!input.trim() || !roomKey) {
+            console.warn("[DEBUG] Cannot send: Missing input or roomKey", { input: input.trim(), roomKey });
+            return;
+        }
 
         try {
+            console.log("[DEBUG] Encrypting message...");
             const { ciphertext, iv } = await encryptMessage(roomKey, input);
+            console.log("[DEBUG] Message encrypted", { ciphertext, iv });
 
             socket.emit('send_message', {
                 roomId,
