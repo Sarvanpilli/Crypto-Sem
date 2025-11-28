@@ -1,30 +1,24 @@
 const { v4: uuidv4 } = require('uuid');
-const NodeRSA = require('node-rsa');
 
+// Store rooms in memory
 const rooms = new Map();
 
 // Room lifetime in milliseconds (e.g., 1 hour)
 const ROOM_LIFETIME = 60 * 60 * 1000;
 
-function createRoom(roomName) {
+function createRoom(roomName, creatorPublicKey) {
     const roomId = uuidv4();
-    const passkey = uuidv4().slice(0, 6).toUpperCase(); // Simple 6-char passkey
-
-    // Generate RSA keys
-    const key = new NodeRSA({ b: 2048 }); // 2048 bits for better security
-    const publicKey = key.exportKey('pkcs1-public');
-    const privateKey = key.exportKey('pkcs1-private');
+    const passkey = Math.random().toString(36).substring(2, 8).toUpperCase();
 
     const room = {
         id: roomId,
         name: roomName,
         passkey,
-        publicKey,
-        privateKey,
+        creatorPublicKey, // Stored for new users to initiate ECDH
         createdAt: Date.now(),
         expiresAt: Date.now() + ROOM_LIFETIME,
-        clients: new Map(), // Map<socketId, { nickname }>
-        messages: [] // Store encrypted messages
+        clients: new Map(), // Map<socketId, { nickname, publicKey }>
+        messages: []
     };
 
     rooms.set(roomId, room);
@@ -39,8 +33,7 @@ function createRoom(roomName) {
 
     return {
         roomId,
-        passkey,
-        publicKey
+        passkey
     };
 }
 
@@ -55,12 +48,11 @@ function joinRoom(roomId, passkey) {
         return { error: 'Invalid passkey' };
     }
 
-    // Return the private key so the client can decrypt messages
+    // Return the creator's public key so the client can initiate ECDH
     return {
         success: true,
         roomName: room.name,
-        publicKey: room.publicKey,
-        privateKey: room.privateKey
+        creatorPublicKey: room.creatorPublicKey
     };
 }
 
@@ -68,10 +60,10 @@ function getRoom(roomId) {
     return rooms.get(roomId);
 }
 
-function addClient(roomId, socketId, nickname) {
+function addClient(roomId, socketId, nickname, publicKey) {
     const room = rooms.get(roomId);
     if (room) {
-        room.clients.set(socketId, { nickname });
+        room.clients.set(socketId, { nickname, publicKey });
         return room.clients.size;
     }
     return 0;
@@ -125,8 +117,6 @@ setInterval(() => {
             if (room.messages.length < initialLength) {
                 // Could emit an event here if we wanted to notify clients to remove it, 
                 // but clients should also manage their own local state or rely on history sync.
-                // For a truly secure chat, we should notify clients to delete local copies.
-                // But for MVP, client-side timers are easier.
             }
         }
     }

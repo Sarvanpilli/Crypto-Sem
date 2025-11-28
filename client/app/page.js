@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
+import { generateECDHKeyPair, generateRoomKey, exportPublicKey, storeKey } from '../lib/crypto';
 
 export default function Home() {
     const router = useRouter();
@@ -58,19 +59,36 @@ export default function Home() {
             return;
         }
         try {
+            // 1. Generate Identity Key (ECDH)
+            const identityKeyPair = await generateECDHKeyPair();
+
+            // 2. Generate Room Key (AES-GCM)
+            const roomKey = await generateRoomKey();
+
+            // 3. Export Public Key to send to server
+            const exportedPublicKey = await exportPublicKey(identityKeyPair.publicKey);
+
             const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3001';
             const res = await fetch(`${serverUrl}/api/create-room`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ roomName: roomName || 'New Room' }),
+                body: JSON.stringify({
+                    roomName: roomName || 'New Room',
+                    creatorPublicKey: exportedPublicKey
+                }),
             });
             const data = await res.json();
+
+            // 4. Store Keys in IndexedDB (Non-extractable)
+            await storeKey(`room_${data.roomId}_identity`, identityKeyPair);
+            await storeKey(`room_${data.roomId}_key`, roomKey);
 
             sessionStorage.setItem('nickname', nickname);
             setCreatedRoom(data);
             setError('');
         } catch (err) {
-            setError('Failed to create room');
+            console.error(err);
+            setError('Failed to create room: ' + err.message);
         }
     };
 
@@ -79,30 +97,12 @@ export default function Home() {
             setError('Please enter a nickname');
             return;
         }
-        try {
-            const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3001';
-            const res = await fetch(`${serverUrl}/api/join-room`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ roomId: joinRoomId, passkey: joinPasskey }),
-            });
-            const data = await res.json();
+        // Just redirect to the room page. 
+        // The room page will handle the "Request Join" flow.
+        sessionStorage.setItem('nickname', nickname);
+        sessionStorage.setItem(`room_${joinRoomId}_passkey`, joinPasskey);
 
-            if (data.error) {
-                setError(data.error);
-                return;
-            }
-
-            sessionStorage.setItem(`room_${joinRoomId}_keys`, JSON.stringify({
-                privateKey: data.privateKey,
-                publicKey: data.publicKey
-            }));
-            sessionStorage.setItem('nickname', nickname);
-
-            router.push(`/room/${joinRoomId}`);
-        } catch (err) {
-            setError('Failed to join room');
-        }
+        router.push(`/room/${joinRoomId}`);
     };
 
     return (
@@ -111,7 +111,7 @@ export default function Home() {
                 <h1 className="text-6xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-600 tracking-tight">
                     Secure Chat
                 </h1>
-                <p className="text-gray-400 text-lg">End-to-end encrypted, ephemeral messaging.</p>
+                <p className="text-gray-400 text-lg">Zero-Knowledge, End-to-End Encrypted.</p>
             </div>
 
             <div className="glass-card w-full max-w-md p-8 rounded-2xl animate-fade-in">
@@ -186,11 +186,6 @@ export default function Home() {
 
                                 <button
                                     onClick={() => {
-                                        sessionStorage.setItem(`room_${createdRoom.roomId}_keys`, JSON.stringify({
-                                            privateKey: createdRoom.privateKey,
-                                            publicKey: createdRoom.publicKey
-                                        }));
-                                        sessionStorage.setItem('nickname', nickname);
                                         router.push(`/room/${createdRoom.roomId}`);
                                     }}
                                     className="w-full mt-6 bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl transition shadow-lg"

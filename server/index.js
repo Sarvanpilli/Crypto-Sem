@@ -22,15 +22,15 @@ app.get('/', (req, res) => {
 
 // API to create a room
 app.post('/api/create-room', (req, res) => {
-    const { roomName } = req.body;
-    if (!roomName) {
-        return res.status(400).json({ error: 'Room name is required' });
+    const { roomName, creatorPublicKey } = req.body;
+    if (!roomName || !creatorPublicKey) {
+        return res.status(400).json({ error: 'Room name and Creator Public Key are required' });
     }
-    const roomDetails = createRoom(roomName);
+    const roomDetails = createRoom(roomName, creatorPublicKey);
     res.json(roomDetails);
 });
 
-// API to join a room (validates passkey and returns keys)
+// API to join a room (validates passkey and returns creator's public key)
 app.post('/api/join-room', (req, res) => {
     const { roomId, passkey } = req.body;
     if (!roomId || !passkey) {
@@ -48,13 +48,34 @@ app.post('/api/join-room', (req, res) => {
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
-    socket.on('join_room_socket', ({ roomId, nickname }) => {
-        // The client should have already validated via API to get keys.
-        // This socket event is just to subscribe to the channel.
+    // New User requesting to join
+    socket.on('request_join', ({ roomId, publicKey, nickname }) => {
+        const room = getRoom(roomId);
+        if (room) {
+            socket.join(roomId); // Join temporarily to receive approval
+
+            // Notify the room (specifically the creator/others) that someone wants to join
+            socket.to(roomId).emit('new_user_request', {
+                socketId: socket.id,
+                publicKey,
+                nickname
+            });
+        }
+    });
+
+    // Existing member approves and sends wrapped key
+    socket.on('approve_join', ({ targetSocketId, encryptedKey, roomId }) => {
+        io.to(targetSocketId).emit('join_approved', {
+            encryptedKey,
+            roomId
+        });
+    });
+
+    socket.on('join_room_socket', ({ roomId, nickname, publicKey }) => {
         const room = getRoom(roomId);
         if (room) {
             socket.join(roomId);
-            addClient(roomId, socket.id, nickname || 'Anonymous');
+            addClient(roomId, socket.id, nickname || 'Anonymous', publicKey);
             console.log(`Socket ${socket.id} (${nickname}) joined room ${roomId}`);
 
             // Send existing message history
@@ -67,14 +88,13 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('send_message', ({ roomId, message, sender, ttl }) => {
-        // Message should be encrypted by client using Public Key
-        // We just relay it.
+    socket.on('send_message', ({ roomId, message, sender, ttl, nonce }) => {
         const room = getRoom(roomId);
         if (room) {
             const senderName = getClientName(roomId, sender);
             const messageData = {
-                message, // Encrypted payload
+                message, // Encrypted payload (AES-GCM ciphertext)
+                nonce,   // IV for AES-GCM
                 sender,
                 senderName,
                 timestamp: Date.now()
@@ -82,13 +102,10 @@ io.on('connection', (socket) => {
 
             if (ttl) {
                 messageData.expiresAt = Date.now() + (ttl * 1000);
-                messageData.ttl = ttl; // Send back to client so they can show a timer or remove it locally
+                messageData.ttl = ttl;
             }
 
-            // Store message in history
             addMessage(roomId, messageData);
-
-            // Broadcast to room
             io.to(roomId).emit('receive_message', messageData);
         }
     });
@@ -104,13 +121,6 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
-        // We need to find which room they were in to notify others
-        // Ideally we track this mapping, but for now we can iterate or just rely on socket.rooms if available before disconnect
-        // But socket.rooms is cleared on disconnect.
-        // We can iterate our rooms map.
-        // For MVP, let's just rely on roomManager cleanup if we want strict tracking, 
-        // but for "User Left" notification, we'd need to know the room.
-        // Let's skip expensive iteration for now unless critical.
     });
 });
 
