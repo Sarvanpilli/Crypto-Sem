@@ -11,7 +11,7 @@ function createRoom(roomName) {
     const passkey = uuidv4().slice(0, 6).toUpperCase(); // Simple 6-char passkey
 
     // Generate RSA keys
-    const key = new NodeRSA({ b: 512 }); // 512 bits for speed in MVP, use 2048+ for prod
+    const key = new NodeRSA({ b: 2048 }); // 2048 bits for better security
     const publicKey = key.exportKey('pkcs1-public');
     const privateKey = key.exportKey('pkcs1-private');
 
@@ -23,7 +23,7 @@ function createRoom(roomName) {
         privateKey,
         createdAt: Date.now(),
         expiresAt: Date.now() + ROOM_LIFETIME,
-        clients: new Set(),
+        clients: new Map(), // Map<socketId, { nickname }>
         messages: [] // Store encrypted messages
     };
 
@@ -68,6 +68,32 @@ function getRoom(roomId) {
     return rooms.get(roomId);
 }
 
+function addClient(roomId, socketId, nickname) {
+    const room = rooms.get(roomId);
+    if (room) {
+        room.clients.set(socketId, { nickname });
+        return room.clients.size;
+    }
+    return 0;
+}
+
+function removeClient(roomId, socketId) {
+    const room = rooms.get(roomId);
+    if (room) {
+        room.clients.delete(socketId);
+        return room.clients.size;
+    }
+    return 0;
+}
+
+function getClientName(roomId, socketId) {
+    const room = rooms.get(roomId);
+    if (room && room.clients.has(socketId)) {
+        return room.clients.get(socketId).nickname;
+    }
+    return 'Unknown';
+}
+
 function addMessage(roomId, messageData) {
     const room = rooms.get(roomId);
     if (room) {
@@ -81,13 +107,38 @@ function addMessage(roomId, messageData) {
 
 function getRoomMessages(roomId) {
     const room = rooms.get(roomId);
-    return room ? room.messages : [];
+    if (!room) return [];
+
+    const now = Date.now();
+    // Filter out expired messages
+    room.messages = room.messages.filter(msg => !msg.expiresAt || msg.expiresAt > now);
+    return room.messages;
 }
+
+// Global cleanup interval for messages (runs every 10 seconds)
+setInterval(() => {
+    const now = Date.now();
+    for (const [roomId, room] of rooms) {
+        if (room.messages.length > 0) {
+            const initialLength = room.messages.length;
+            room.messages = room.messages.filter(msg => !msg.expiresAt || msg.expiresAt > now);
+            if (room.messages.length < initialLength) {
+                // Could emit an event here if we wanted to notify clients to remove it, 
+                // but clients should also manage their own local state or rely on history sync.
+                // For a truly secure chat, we should notify clients to delete local copies.
+                // But for MVP, client-side timers are easier.
+            }
+        }
+    }
+}, 10000);
 
 module.exports = {
     createRoom,
     joinRoom,
     getRoom,
+    addClient,
+    removeClient,
+    getClientName,
     addMessage,
     getRoomMessages
 };
